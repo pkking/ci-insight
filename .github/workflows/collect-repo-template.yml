@@ -1,0 +1,69 @@
+# Per-repo GitHub Action workflow for CI data collection.
+# Each repo has its own workflow and its own GitHub token secret to reduce rate limit issues.
+#
+# Required secret: <OWNER>_<REPO> (uppercase, hyphens replaced with underscores)
+# Example: For vllm-project/vllm-ascend → VLLM_PROJECT_VLLM_ASCEND
+
+name: Collect CI Data - {{REPO_SLUG}}
+on:
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Restart history backfill from the earliest retained day'
+        required: false
+        default: false
+        type: boolean
+      reverse:
+        description: 'Collect from today backward instead of oldest-first backfill'
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm config set registry https://registry.npmjs.org
+      - run: npm install tsx @octokit/core date-fns js-yaml @libsql/client
+      - id: collect
+        continue-on-error: true
+        run: |
+          args=(--repo "{{OWNER}}/{{REPO}}")
+          if [ "${WORKFLOW_FORCE}" = "true" ]; then
+            args+=(--force-full-backfill)
+          fi
+          if [ "${WORKFLOW_REVERSE}" = "true" ]; then
+            args+=(--reverse)
+          fi
+          npx tsx etl/scripts/collect.ts "${args[@]}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.{{TOKEN_SECRET_NAME}} }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          RETENTION_DAYS: 90
+          VERBOSE: 1
+          WORKFLOW_FORCE: ${{ inputs.force }}
+          WORKFLOW_REVERSE: ${{ inputs.reverse }}
+      - id: test-case-stats
+        continue-on-error: true
+        run: npx tsx etl/scripts/collect-test-case-stats.ts --repo "{{OWNER}}/{{REPO}}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.{{TOKEN_SECRET_NAME}} }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          VERBOSE: 1
+      - if: always() && steps.collect.outcome == 'failure'
+        run: |
+          echo "Collection completed with partial failures. Data was written to Turso."
+          exit 1

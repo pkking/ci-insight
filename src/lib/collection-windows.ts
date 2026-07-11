@@ -1,0 +1,187 @@
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function addUtcDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * DAY_MS);
+}
+
+// UTC-safe date formatting: avoids timezone-related off-by-one errors
+function utcDateString(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+export interface CollectionWindow {
+  start: string;
+  end: string;
+}
+
+interface BuildCollectionWindowsOptions {
+  latest: string;
+  existingFileCount?: number;
+  historyComplete?: boolean;
+  backfillCursor?: string;
+  retentionDays: number;
+  now?: Date;
+  windowDays?: number;
+  forceFullBackfill?: boolean;
+  reverse?: boolean;
+}
+
+const DEFAULT_WINDOW_DAYS = 7;
+
+export function buildCollectionWindows({
+  latest,
+  existingFileCount = 0,
+  historyComplete,
+  backfillCursor,
+  retentionDays,
+  now = new Date(),
+  windowDays = DEFAULT_WINDOW_DAYS,
+  forceFullBackfill = false,
+  reverse = false,
+}: BuildCollectionWindowsOptions): CollectionWindow[] {
+  const hasIncompleteHistory =
+    historyComplete === false ||
+    Boolean(backfillCursor) ||
+    (historyComplete === undefined && Boolean(latest) && existingFileCount <= 1);
+  const today = utcDateString(now);
+  const oldest = utcDateString(addUtcDays(now, -retentionDays));
+  const forwardStart = backfillCursor || oldest;
+
+  if (reverse) {
+    // When history is complete and not forcing full backfill, only collect
+    // the incremental window (latest → today) in reverse order.
+    if (latest && !forceFullBackfill && !hasIncompleteHistory) {
+      return buildReverseCollectionWindows(latest, today, windowDays);
+    }
+    // For forceFullBackfill, always start from oldest to ensure complete rebuild.
+    const reverseStart = forceFullBackfill ? oldest : forwardStart;
+
+    // When history is incomplete but we have a latest date, split into
+    // incremental + backfill windows (mirroring forward mode) to avoid
+    // redundant API requests for already-collected dates.
+    if (latest && !forceFullBackfill && hasIncompleteHistory) {
+      const recentWindows = buildReverseCollectionWindows(latest, today, windowDays);
+      const backfillEnd = utcDateString(addUtcDays(new Date(`${latest}T00:00:00Z`), -1));
+
+      if (reverseStart > backfillEnd) {
+        return recentWindows;
+      }
+
+      return [...recentWindows, ...buildReverseCollectionWindows(reverseStart, backfillEnd, windowDays)];
+    }
+
+    return buildReverseCollectionWindows(reverseStart, today, windowDays);
+  }
+
+  if (latest && !forceFullBackfill && !hasIncompleteHistory) {
+    return [{ start: latest, end: today }];
+  }
+
+  if (latest && !forceFullBackfill && hasIncompleteHistory) {
+    const recentWindows = buildForwardCollectionWindows(latest, today, windowDays);
+    const backfillEnd = utcDateString(addUtcDays(new Date(`${latest}T00:00:00Z`), -1));
+
+    if (forwardStart > backfillEnd) {
+      return recentWindows;
+    }
+
+    return [...recentWindows, ...buildForwardCollectionWindows(forwardStart, backfillEnd, windowDays)];
+  }
+
+  return buildForwardCollectionWindows(forceFullBackfill ? oldest : forwardStart, today, windowDays);
+}
+
+function buildForwardCollectionWindows(startDate: string, endDate: string, windowDays: number): CollectionWindow[] {
+  const windows: CollectionWindow[] = [];
+  let start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+
+  while (start <= end) {
+    const windowEnd = addUtcDays(start, windowDays);
+    windows.push({
+      start: utcDateString(start),
+      end: utcDateString(windowEnd > end ? end : windowEnd),
+    });
+
+    start = addUtcDays(windowEnd, 1);
+  }
+
+  return windows;
+}
+
+function buildReverseCollectionWindows(startDate: string, endDate: string, windowDays: number): CollectionWindow[] {
+  const windows: CollectionWindow[] = [];
+  const oldest = new Date(`${startDate}T00:00:00Z`);
+  let end = new Date(`${endDate}T00:00:00Z`);
+
+  while (end >= oldest) {
+    const windowStart = addUtcDays(end, -windowDays);
+    windows.push({
+      start: utcDateString(windowStart < oldest ? oldest : windowStart),
+      end: utcDateString(end),
+    });
+
+    end = addUtcDays(windowStart < oldest ? oldest : windowStart, -1);
+  }
+
+  return windows;
+}
+
+export function mergeCollectedDates(existingFiles: string[], collectedDates: string[]): string[] {
+  const fileSet = new Set(existingFiles);
+
+  for (const date of collectedDates) {
+    fileSet.add(`${date}.json`);
+  }
+
+  return Array.from(fileSet).sort().reverse();
+}
+
+function toCreatedBoundary(value: string, isEnd: boolean): string {
+  if (value.includes('T')) {
+    return value;
+  }
+
+  return `${value}T${isEnd ? '23:59:59' : '00:00:00'}Z`;
+}
+
+export function toCreatedRange(window: CollectionWindow): string {
+  return `${toCreatedBoundary(window.start, false)}..${toCreatedBoundary(window.end, true)}`;
+}
+
+function parseWindowBoundary(value: string): Date {
+  return new Date(value.includes('T') ? value : `${value}T00:00:00Z`);
+}
+
+export function splitCollectionWindow(window: CollectionWindow): CollectionWindow[] {
+  const start = parseWindowBoundary(window.start);
+  const end = parseWindowBoundary(window.end);
+  const durationMs = end.getTime() - start.getTime();
+
+  if (durationMs <= 60_000) {
+    return [];
+  }
+
+  const midpoint = new Date(start.getTime() + Math.floor(durationMs / 2));
+  const midpointIso = midpoint.toISOString().replace('.000Z', 'Z');
+
+  return [
+    {
+      start: start.toISOString().replace('.000Z', 'Z'),
+      end: midpointIso,
+    },
+    {
+      start: midpointIso,
+      end: end.toISOString().replace('.000Z', 'Z'),
+    },
+  ];
+}
+
+const collectionWindows = {
+  buildCollectionWindows,
+  mergeCollectedDates,
+  splitCollectionWindow,
+  toCreatedRange,
+};
+
+export default collectionWindows;

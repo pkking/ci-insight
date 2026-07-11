@@ -1,0 +1,37 @@
+name: Bug Report
+description: Create a bug report to help us improve
+title: "[BUG] "
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: To Reproduce
+      description: Steps to reproduce the behavior (e.g., Repo URL, Timeframe selected).
+      placeholder: |
+        1. Go to '...'
+        2. Click on '...'
+        3. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser Environment
+      description: What browser are you using? (e.g., Chrome, Safari, Firefox)
+    validations:
+      required: false

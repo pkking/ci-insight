@@ -1,0 +1,63 @@
+# AGENTS.md - Action Insight Repository Context
+
+## 项目简介 (Project Overview)
+**Action Insight** 是一个用于监控和可视化 GitHub Actions 工作流状态的 Web 应用。
+- **技术栈**：Next.js, TypeScript, Tailwind CSS, Recharts, Lucide React, date-fns。
+- **核心组件**：采用 Server/Client Components 结合 (`'use client'`指令处理 React Hooks)。
+
+## 核心业务逻辑 (Core Business Logic)
+1.  **数据抓取与缓存**：通过 GitHub API 获取 Runs 和 Jobs 数据，并在本地进行缓存处理。
+2.  **筛选与匹配规则**：
+    - **Runner Label 筛选**：Workflow 级别匹配采用“任意 Job 命中即选中 Workflow”的原则。只要 Workflow 中的任何一个 Job 带有用户指定的 Runner Label，即在列表中展示该 Workflow。
+3.  **多视图可视化**：支持作业数据的“时间线 (timeline)”和“表格 (table)”视图，并通过图表 (`LineChart`, `ReferenceArea`) 展示排队、耗时等性能数据。
+
+## AI 协助开发规范 (AI Development Guidelines)
+
+当 AI 助手在这个仓库中工作时，必须遵守以下约定：
+1.  **保持技术栈一致性**：新创建的组件如果在浏览器端交互，必须带有 `'use client'` 声明。
+2.  **样式规范**：使用 Tailwind CSS 进行样式编写，并确保所有新增 UI 支持 `dark:` 模式适配。
+3.  **容错处理**：在渲染图表和列表时，必须优雅处理数据空状态 (Empty State) 和加载中状态 (`jobsLoading`)。
+4.  **成本意识**：避免无意义地频繁调用 GitHub API 列表，尽可能重用现有的离线/本地缓存策略，对于长链路的数据解析，采用二级查询 + 本地脚本离线筛选方案。
+5.  **ADR 记录要求**：当变更涉及架构决策、数据模型、缓存策略、ETL 流程、外部服务集成、跨模块契约或长期维护成本时，必须在 `docs/adr/` 新增或更新 Architecture Decision Record。ADR 应说明背景、决策、取舍、影响范围和后续约束；纯样式、文案或小范围 bugfix 可不写 ADR，但 PR 描述中应说明无需 ADR 的原因。
+6.  **PR 工作流（唯一发布路径）**：所有变更必须通过 feature 分支 → Pull Request → 合并流程。**禁止直接在 `main` 分支上 commit 或 push**。
+    - **Step 0 — 分支检查**：在任何 commit 之前，执行 `git branch --show-current`。**如果当前分支是 `main`，必须先创建 feature 分支，禁止直接在 `main` 上 commit**。
+    - **Step 1 — 同步 main**：`git fetch origin main && git checkout -B main origin/main && git checkout -b feat/<descriptive-name>`
+    - **Step 2 — Commit**：使用 [Conventional Commits 1.0.0](https://www.conventionalcommits.org/en/v1.0.0/#specification) 规范提交，格式为 `type(scope): description` 或 `type: description`，常用类型包括 `feat`、`fix`、`ci`、`docs`、`test`、`refactor`、`chore`。
+    - **Step 3 — Push 分支**：`git push -u origin <feature-branch-name>`
+    - **Step 4 — 创建 PR**：`gh pr create --base main`，PR 标题必须使用 Conventional Commits 格式，优先直接复用最新提交标题；如果手动创建，至少要用 `gh pr create --title "$(git log -1 --pretty=%s)"` 这类方式保证标题合规。PR 描述需说明变更内容、测试情况、相关文档链接。
+    - **PR 打开后禁止 force push**：审查过程中产生的任何修改都必须追加新的 Conventional Commit 并正常 push，禁止使用 `git commit --amend`、`git rebase` 或 `git push --force/--force-with-lease` 重写 PR 历史，除非用户明确要求。
+    - **一个分支只对应一个 PR**：push 过 origin 的分支在 PR 合入后不再用于新任务。每次新任务都必须基于最新 main 创建新分支并新建 PR，禁止复用已合入的 feature 分支。审查期间对同一 PR 的修改仍可追加 commit。
+    - 等待审查通过后合并，合并后删除 feature 分支
+    - **Gitignore 规范**：**AI 工具相关目录不应被加入 .gitignore**。例如 `.codex`、`.sisyphus`、`.serena/memories` 等目录包含有用的 AI 会话信息和上下文，应当保留在仓库中以便跨会话共享和延续上下文。只有临时缓存文件（如 `.serena/cache/`）和编译产物（如 `__pycache__/`）才应被忽略。
+
+## 本地维护工具使用建议 (Local Maintenance Tools)
+
+AI 助手在维护 ETL、Supabase 数据或恢复指标时，应优先使用以下本地入口，并遵守成本控制原则：
+
+1.  **Schema 迁移**：当修改 `supabase/schema.sql`、新增表/函数，或本地/CI 需要补齐数据库结构时，使用 `npm run migrate:supabase`。需要设置 `SUPABASE_DB_URL`，CI 中可设置 `AUTO_MIGRATE_SUPABASE=1`，证书链异常时才使用 `SUPABASE_DB_SSL=no-verify`。
+2.  **Raw CI 采集**：当 `runs` 或 `jobs` 缺失/过期时，使用 `npx tsx etl/scripts/collect.ts --repo owner/repo`。该脚本只负责抓取 GitHub Actions runs/jobs 并写 Supabase，不再重建 PR metrics。避免无范围、无目的地重复运行，以免浪费 GitHub API 配额。
+3.  **PR 指标重建**：当 raw runs 已存在，但 `pr_metrics` / `pr_workflows` 缺失、落后或部分解析时，优先使用 `npm run rebuild:pr-artifacts -- --repo owner/repo --start-date yyyy-mm-dd --end-date yyyy-mm-dd`。尽量提供日期范围，避免全量扫描。`GITHUB_TOKEN` 可选；没有 token 时只能依赖 run payload 和 `pr_resolution_cache`。
+    - **Token 配置**：Rebuild workflow 使用 per-repo token 机制，优先级为 `GITHUB_TOKEN_PER_REPO_<OWNER>_<REPO>` → `GITHUB_TOKEN_PER_REPO_TRITON_LANG_TRITON_ASCEND`（fallback PAT）。新增 repo 时需确保在 GitHub Settings → Secrets 中配置对应的 `GITHUB_TOKEN_PER_REPO_<OWNER>_<REPO>`，否则会降级使用 triton-ascend 的 token（共享 rate limit 5,000/h）。
+4.  **兼容入口**：`etl/scripts/rebuild-pr-artifacts-local.ts` 仅作为旧路径兼容 wrapper，新的说明、脚本和自动化应使用 `npm run rebuild:pr-artifacts` 或 `etl/scripts/rebuild-pr-artifacts.ts`。
+5.  **回填策略**：只有在需要从保留窗口最早日期重新构建 raw history 时才使用 `collect.ts --force-full-backfill`；当最新数据优先级更高时使用 `collect.ts --reverse`。
+6.  **验证命令**：改动完成后至少运行与改动相关的测试；通用验证为 `npm run lint` 和 `npm test`。ETL 脚本改动应额外跑相关 `vitest` 文件和脚本 `--help`。
+
+## CI 工具规范 (CI Tool Requirements)
+
+AI 助手在提交变更之前，**必须先在本地跑过与改动相关的 CI 工具**，确保不会在 PR 里制造可预见的 CI 失败。
+
+| 改动范围 | 必须跑的命令 | CI 对应 workflow |
+|---------|-------------|-----------------|
+| `src/**`, `package.json`, 配置 | `npm run lint` + `npm test` | `ci.yml`, `build.yml`, `type-check.yml` |
+| `.github/workflows/**`, `.github/actions/**` | `actionlint`（或 CI 兼容的等价命令） | `actionlint.yml` |
+| `etl/**` | `npm run lint` + ETL validate | `etl-validate.yml` |
+| `supabase/schema.sql` | `npm run migrate:supabase`（dry-run 或本地库） | — |
+| 文档 / Markdown | `npm run lint`（如有 markdown lint） | `link-check.yml` |
+
+**安装 actionlint**：`bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)`
+**actionlint 用法**：`./actionlint -color -ignore 'got unexpected character'`
+
+原则：**CI 失败能本地预判的，必须在 commit 前修掉。**
+
+## 相关关联 (Relations)
+此仓库针对 `vllm-project/vllm-ascend` 等带有复杂 CI/CD 标签的仓库进行了专门的适配（例如针对 `npu` 或 `large-disk` 标签）。

@@ -1,0 +1,39 @@
+# List of repositories and workflows to track.
+# Workflow file rules use basenames such as ci.yml, not .github/workflows/ci.yml paths.
+defaults:
+  steps_min_workflow_duration_seconds: 600
+
+repos:
+  - repo: hiyouga/LlamaFactory
+    workflows:
+      - file: tests_npu.yml
+      - file: tests_cuda.yml
+  - repo: modelscope/ms-swift
+    workflows:
+      - file: citest_npu.yaml
+      - file: citest.yaml
+  - repo: sgl-project/sglang
+    workflows:
+      - file: pr-test-npu.yml
+      - file: pr-test.yml
+  - repo: tile-ai/tilelang-mlir-ascend
+    workflows:
+      - file: base_ci.yml
+  - repo: tile-ai/tilelang
+    workflows:
+      - file: ci.yml
+  - repo: triton-lang/triton
+    workflows:
+      - file: ci.yml
+  - repo: triton-lang/triton-ascend
+    workflows:
+      - file: ci.yml
+  - repo: verl-project/verl
+    workflows:
+      - file: e2e_ascend.yml
+      - file: e2e_ppo_grpo_trainer_trtllm.yml
+  - repo: vllm-project/vllm-ascend
+    workflows:
+      - file: pr_test.yaml
+      - file: schedule_nightly_test_a2.yaml
+      - file: schedule_nightly_test_a3.yaml

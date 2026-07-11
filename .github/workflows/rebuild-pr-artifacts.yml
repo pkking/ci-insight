@@ -1,0 +1,49 @@
+name: Rebuild PR Artifacts
+on:
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: 'Rebuild specific repo (owner/repo). Leave empty for all.'
+        required: false
+        type: string
+      start_date:
+        description: 'Start date (yyyy-mm-dd)'
+        required: false
+        type: string
+      end_date:
+        description: 'End date (yyyy-mm-dd)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - run: npm config set registry https://registry.npmjs.org
+      - run: npm install tsx @octokit/core date-fns js-yaml @libsql/client
+      - name: Rebuild PR artifacts
+        run: |
+          args=()
+          if [ -n "${REBUILD_REPO}" ]; then
+            args+=(--repo "${REBUILD_REPO}")
+          fi
+          if [ -n "${START_DATE}" ]; then
+            args+=(--start-date "${START_DATE}")
+          fi
+          if [ -n "${END_DATE}" ]; then
+            args+=(--end-date "${END_DATE}")
+          fi
+          npx tsx etl/scripts/rebuild-pr-artifacts.ts "${args[@]}"
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          REBUILD_REPO: ${{ inputs.repo || '' }}
+          START_DATE: ${{ inputs.start_date || '' }}
+          END_DATE: ${{ inputs.end_date || '' }}
