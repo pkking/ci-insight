@@ -1,4 +1,4 @@
-import { getTursoClient, getRepoId } from './turso';
+import { getDashboardClient, getRepoId } from './database';
 import { computePullRequestAttemptMetrics } from './pr-metrics';
 import type { PullRequestDetailFile, PullRequestIndexFile, PullRequestMetricsSummary, Run } from './types';
 
@@ -65,8 +65,8 @@ function mapAttemptRunRow(row: Record<string, unknown>): Run {
 }
 
 export async function fetchPullRequestIndex(owner: string, repo: string): Promise<PullRequestIndexFile> {
-  const repoId = await getRepoId(owner, repo);
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
+  const repoId = await getRepoId(owner, repo, client);
 
   const { rows } = await client.execute({
     sql: `SELECT * FROM pr_metrics WHERE repo_id = ? ORDER BY created_at DESC`,
@@ -90,8 +90,8 @@ export async function fetchPullRequestIndex(owner: string, repo: string): Promis
 }
 
 export async function fetchPullRequestDetail(owner: string, repo: string, number: number): Promise<PullRequestDetailFile> {
-  const repoId = await getRepoId(owner, repo);
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
+  const repoId = await getRepoId(owner, repo, client);
 
   // Fetch PR metrics
   const { rows: prRows } = await client.execute({

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getTursoClient } from '@/lib/turso';
+import { getDashboardClient, getRepoId } from '@/lib/database';
 import { getTrackedRepoOptions } from '@/lib/server-homepage-data';
 
 function isSameOrigin(request: Request): boolean {
@@ -49,18 +49,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Repository not found' }, { status: 404 });
     }
 
-    const client = getTursoClient();
-
-    const { rows: repoRows } = await client.execute({
-      sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
-      args: [body.owner, body.repo],
-    });
-
-    if (repoRows.length === 0) {
-      return NextResponse.json({ data: null });
-    }
-
-    const repoId = repoRows[0].id;
+    const client = getDashboardClient(body.owner, body.repo);
+    const repoId = await getRepoId(body.owner, body.repo, client);
 
     const { rows: statsRows } = await client.execute({
       sql: `SELECT * FROM test_case_stats WHERE repo_id = ? ORDER BY generated_at DESC LIMIT 1`,

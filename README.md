@@ -44,6 +44,10 @@ Each repository has its own workflow file (`.github/workflows/collect-<owner>-<r
 - `SUPABASE_SERVICE_ROLE_KEY` — Supabase service role key
 - `SUPABASE_DB_URL` — PostgreSQL connection string for automatic schema migrations before ETL collection and production builds. If absent, the migration script also checks `DATABASE_URL`, `POSTGRES_URL_NON_POOLING`, `POSTGRES_URL`, and `POSTGRES_PRISMA_URL`.
 - `SUPABASE_DB_SSL` — Optional migration SSL mode. Use `no-verify` when the database connection presents a self-signed certificate chain in CI.
+- `DASHBOARD_DATA_SOURCE` — Optional dashboard read backend: `sqlite` for local per-repository ETL databases or `turso` for the remote production database. It defaults to `sqlite` outside production and `turso` in production.
+- `SQLITE_DATA_DIR` — Optional local SQLite directory override. By default the dashboard reads `etl/data/<owner>-<repo>.db`.
+- `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` — Required when `DASHBOARD_DATA_SOURCE=turso`.
+- `NEXT_PUBLIC_GITHUB_REPOSITORY` — Optional GitHub repository path used by feedback links, defaulting to `pkking/ci-insight`.
 
 ## Getting Started
 
@@ -56,7 +60,9 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-> **Note**: The frontend reads data from Supabase. Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`.
+> **Note**: Local development reads the SQLite databases produced by ETL. Ensure the selected repository database exists under `etl/data/`, or set `SQLITE_DATA_DIR` to its directory. Set `DASHBOARD_DATA_SOURCE=turso` only when intentionally developing against the remote database.
+
+The Vercel project name and deployment domain are not coupled to the GitHub repository name. Browser share links use the current deployment origin, while GitHub links use `NEXT_PUBLIC_GITHUB_REPOSITORY`; set that variable only when deploying this code to a different repository.
 
 ### ETL Pipeline
 
@@ -87,6 +93,7 @@ To rebuild PR metrics from already-collected raw runs, use **Actions** → **Reb
 
 ```bash
 npm install
+DASHBOARD_DATA_SOURCE=sqlite npm run dev
 SUPABASE_DB_URL=postgresql://... SUPABASE_DB_SSL=no-verify npm run migrate:supabase
 GITHUB_TOKEN=your_token SUPABASE_URL=your_url SUPABASE_SERVICE_ROLE_KEY=your_key npx tsx etl/scripts/collect.ts --repo owner/repo
 ```

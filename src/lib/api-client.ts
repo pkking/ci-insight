@@ -1,10 +1,21 @@
 type FetchRunsParams = { owner: string; repo: string; startDate: string; endDate: string; includeSteps?: boolean };
 type FetchLatestRunsParams = { owner: string; repo: string; maxFiles?: number };
 type FetchPullRequestDetailParams = { owner: string; repo: string; number: number };
+type FetchRunOverviewParams = {
+  owner: string;
+  repo: string;
+  startDate: string;
+  endDate: string;
+  workflowFile?: string;
+  workflowRef?: string;
+};
+type FetchRunPageParams = FetchRunOverviewParams & { page?: number; pageSize?: 20 | 50 | 100 };
 
 export async function callApi<T>(action: 'fetchRuns', params: FetchRunsParams, signal?: AbortSignal): Promise<T>;
 export async function callApi<T>(action: 'fetchLatestRuns', params: FetchLatestRunsParams, signal?: AbortSignal): Promise<T>;
 export async function callApi<T>(action: 'fetchPullRequestDetail', params: FetchPullRequestDetailParams, signal?: AbortSignal): Promise<T>;
+export async function callApi<T>(action: 'fetchRunOverview', params: FetchRunOverviewParams, signal?: AbortSignal): Promise<T>;
+export async function callApi<T>(action: 'fetchRunPage', params: FetchRunPageParams, signal?: AbortSignal): Promise<T>;
 export async function callApi<T>(action: string, params: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
   const response = await fetch('/api/data', {
     method: 'POST',

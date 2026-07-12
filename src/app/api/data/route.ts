@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { fetchRuns, fetchLatestRuns } from '@/lib/data-fetcher';
+import { fetchRunOverview, fetchRunPage, fetchRuns, fetchLatestRuns } from '@/lib/data-fetcher';
+import type { RunOverviewFilters } from '@/lib/run-overview-types';
 import { fetchPullRequestDetail } from '@/lib/pr-data-fetcher';
 import { getTrackedRepoOptions } from '@/lib/server-homepage-data';
 
@@ -29,10 +30,31 @@ type FetchPullRequestDetailRequest = {
   number: number;
 };
 
+type RunOverviewRequestFields = {
+  owner: string;
+  repo: string;
+  startDate: string;
+  endDate: string;
+  workflowFile?: string;
+  workflowRef?: string;
+};
+
+type FetchRunOverviewRequest = RunOverviewRequestFields & {
+  action: 'fetchRunOverview';
+};
+
+type FetchRunPageRequest = RunOverviewRequestFields & {
+  action: 'fetchRunPage';
+  page?: number;
+  pageSize?: number;
+};
+
 type DataRequest =
   | FetchRunsRequest
   | FetchLatestRunsRequest
-  | FetchPullRequestDetailRequest;
+  | FetchPullRequestDetailRequest
+  | FetchRunOverviewRequest
+  | FetchRunPageRequest;
 
 function isSameOrigin(request: Request): boolean {
   const origin = request.headers.get('origin');
@@ -46,6 +68,26 @@ function isSameOrigin(request: Request): boolean {
   } catch {
     return false;
   }
+}
+
+function parseRunOverviewFilters(body: RunOverviewRequestFields): RunOverviewFilters | Response {
+  if (!body.startDate || !body.endDate) {
+    return NextResponse.json({ error: 'Missing required fields: startDate, endDate' }, { status: 400 });
+  }
+  if (!DATE_REGEX.test(body.startDate) || !DATE_REGEX.test(body.endDate) || body.startDate > body.endDate) {
+    return NextResponse.json({ error: 'Invalid date range: use YYYY-MM-DD with startDate <= endDate' }, { status: 400 });
+  }
+  for (const [name, value] of [['workflowFile', body.workflowFile], ['workflowRef', body.workflowRef]] as const) {
+    if (value !== undefined && (typeof value !== 'string' || value.length === 0 || value.length > 200)) {
+      return NextResponse.json({ error: `Invalid field: ${name}` }, { status: 400 });
+    }
+  }
+  return {
+    startDate: body.startDate,
+    endDate: body.endDate,
+    workflowFile: body.workflowFile,
+    workflowRef: body.workflowRef,
+  };
 }
 
 export async function POST(request: Request) {
@@ -79,6 +121,28 @@ export async function POST(request: Request) {
     }
 
     switch (body.action) {
+      case 'fetchRunOverview': {
+        const filters = parseRunOverviewFilters(body);
+        if (filters instanceof Response) return filters;
+        const runs = await fetchRunOverview(body.owner, body.repo, filters);
+        return NextResponse.json({ data: runs });
+      }
+
+      case 'fetchRunPage': {
+        const filters = parseRunOverviewFilters(body);
+        if (filters instanceof Response) return filters;
+        const page = body.page ?? 1;
+        const pageSize = body.pageSize ?? 20;
+        if (!Number.isInteger(page) || page < 1) {
+          return NextResponse.json({ error: 'Invalid field: page must be a positive integer' }, { status: 400 });
+        }
+        if (!Number.isInteger(pageSize) || ![20, 50, 100].includes(pageSize)) {
+          return NextResponse.json({ error: 'Invalid field: pageSize must be 20, 50, or 100' }, { status: 400 });
+        }
+        const result = await fetchRunPage(body.owner, body.repo, { ...filters, page, pageSize });
+        return NextResponse.json({ data: result });
+      }
+
       case 'fetchRuns': {
         if (!body.startDate || !body.endDate) {
           return NextResponse.json({ error: 'Missing required fields: startDate, endDate' }, { status: 400 });

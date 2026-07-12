@@ -1,4 +1,7 @@
+import { getDashboardClient, getRepoId } from './database';
 import { getTursoClient } from './turso';
+import type { RunOverviewFilters, RunOverviewPoint, RunPageResult } from './run-overview-types';
+export type { RunOverviewFilters, RunOverviewPoint, RunPageResult } from './run-overview-types';
 import type { Index, DayData, Run, Job, Step } from './types';
 
 function mapRunRow(row: Record<string, unknown>): Run {
@@ -93,11 +96,9 @@ function mapAttemptJobRow(row: Record<string, unknown>): Job {
   };
 }
 
-async function fetchStepsForJobs(jobIds: number[]): Promise<Map<number, Step[]>> {
+async function fetchStepsForJobs(jobIds: number[], client = getTursoClient()): Promise<Map<number, Step[]>> {
   const uniqueJobIds = Array.from(new Set(jobIds));
   if (uniqueJobIds.length === 0) return new Map();
-  const client = getTursoClient();
-
   const stepsByJob = new Map<number, Step[]>();
   const CHUNK = 500;
   for (let i = 0; i < uniqueJobIds.length; i += CHUNK) {
@@ -133,14 +134,13 @@ function attachStepsToRuns(runs: Run[], stepsByJob: Map<number, Step[]>): void {
   }
 }
 
-async function fetchStepsAndAttach(runs: Run[]): Promise<void> {
+async function fetchStepsAndAttach(runs: Run[], client = getTursoClient()): Promise<void> {
   const allJobIds = runs.flatMap((r) => r.jobs?.map((j) => j.id) ?? []);
-  const stepsByJob = await fetchStepsForJobs(allJobIds);
+  const stepsByJob = await fetchStepsForJobs(allJobIds, client);
   attachStepsToRuns(runs, stepsByJob);
 }
 
-export async function fetchAttemptStepsAndAttach(runs: Run[]): Promise<void> {
-  const client = getTursoClient();
+export async function fetchAttemptStepsAndAttach(runs: Run[], client = getTursoClient()): Promise<void> {
   const jobKeys = runs.flatMap((run) =>
     (run.jobs ?? []).map((job) => ({
       runId: run.id,
@@ -195,8 +195,121 @@ export interface FetchRunsOptions {
   includeSteps?: boolean;
 }
 
+function addRunOverviewFilters(
+  args: Array<string | number>,
+  options: RunOverviewFilters,
+): string {
+  let result = 'WHERE r.repo_id = ? AND r.date >= ? AND r.date <= ?';
+  args.push(options.startDate, options.endDate);
+  if (options.workflowFile) {
+    result += ' AND wa.workflow_file = ?';
+    args.push(options.workflowFile);
+  }
+  if (options.workflowRef) {
+    result += ' AND wa.workflow_ref = ?';
+    args.push(options.workflowRef);
+  }
+  return result;
+}
+
+async function queryRunOverviewRows(
+  owner: string,
+  repo: string,
+  options: RunOverviewFilters,
+  pagination?: { limit: number; offset: number },
+): Promise<{ rows: RunOverviewPoint[]; total: number }> {
+  const client = getDashboardClient(owner, repo);
+  const repoId = await getRepoId(owner, repo, client);
+  const args: Array<string | number> = [repoId];
+  const where = addRunOverviewFilters(args, options);
+
+  const countResult = await client.execute({
+    sql: `SELECT COUNT(*) AS total
+          FROM workflow_attempts wa
+          JOIN runs r ON r.id = wa.run_id
+          ${where}`,
+    args,
+  });
+  const total = Number(countResult.rows[0]?.total ?? 0);
+
+  const queryArgs = [...args];
+  const order = pagination ? 'DESC' : 'ASC';
+  let limitSql = '';
+  if (pagination) {
+    limitSql = ' LIMIT ? OFFSET ?';
+    queryArgs.push(pagination.limit, pagination.offset);
+  }
+
+  const result = await client.execute({
+    sql: `SELECT r.id, r.name, r.html_url, r.created_at,
+                 wa.run_attempt,
+                 wa.workflow_file, wa.workflow_ref, wa.status, wa.conclusion,
+                 wa.queue_duration_seconds, wa.runtime_seconds, wa.total_duration_seconds,
+                 (SELECT MIN(pm.pr_number)
+                    FROM pr_workflow_attempts pwa
+                    JOIN pr_metrics pm ON pm.id = pwa.pr_metric_id
+                   WHERE pwa.run_id = wa.run_id AND pwa.run_attempt = wa.run_attempt) AS pr_number
+          FROM workflow_attempts wa
+          JOIN runs r ON r.id = wa.run_id
+          ${where}
+          ORDER BY wa.created_at ${order}, wa.run_id ${order}, wa.run_attempt ${order}${limitSql}`,
+    args: queryArgs,
+  });
+
+  return {
+    total,
+    rows: result.rows.map((row) => {
+      const queueSeconds = row.queue_duration_seconds == null ? null : Number(row.queue_duration_seconds);
+      const executionSeconds = row.runtime_seconds == null ? null : Number(row.runtime_seconds);
+      const totalSeconds = row.total_duration_seconds == null
+        ? queueSeconds != null && executionSeconds != null ? queueSeconds + executionSeconds : null
+        : Number(row.total_duration_seconds);
+      return {
+        id: Number(row.id),
+        runAttempt: Number(row.run_attempt),
+        name: row.name as string,
+        workflowFile: (row.workflow_file as string | null) ?? undefined,
+        workflowRef: (row.workflow_ref as string | null) ?? undefined,
+        status: row.status as string,
+        conclusion: (row.conclusion as string) || '',
+        createdAt: row.created_at as string,
+        queueSeconds,
+        executionSeconds,
+        totalSeconds,
+        htmlUrl: row.html_url as string,
+        prNumber: row.pr_number == null ? null : Number(row.pr_number),
+      };
+    }),
+  };
+}
+
+export async function fetchRunOverview(owner: string, repo: string, options: RunOverviewFilters): Promise<RunOverviewPoint[]> {
+  const result = await queryRunOverviewRows(owner, repo, options);
+  return result.rows;
+}
+
+export async function fetchRunPage(
+  owner: string,
+  repo: string,
+  options: RunOverviewFilters & { page: number; pageSize: number },
+): Promise<RunPageResult> {
+  const pageSize = Math.min(100, Math.max(20, options.pageSize));
+  const page = Math.max(1, options.page);
+  const result = await queryRunOverviewRows(owner, repo, options, {
+    limit: pageSize,
+    offset: (page - 1) * pageSize,
+  });
+  return {
+    runs: result.rows,
+    total: result.total,
+    page,
+    pageSize,
+    totalPages: Math.max(1, Math.ceil(result.total / pageSize)),
+  };
+}
+
 export async function fetchIndex(owner: string, repo: string): Promise<Index> {
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
   const { rows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
     args: [owner, repo],
@@ -227,7 +340,7 @@ export async function fetchIndex(owner: string, repo: string): Promise<Index> {
 
 export async function fetchDay(owner: string, repo: string, fileName: string): Promise<DayData> {
   const date = fileName.replace('.json', '');
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
 
   const { rows: repoRows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
@@ -238,7 +351,7 @@ export async function fetchDay(owner: string, repo: string, fileName: string): P
   }
   const repoId = Number(repoRows[0].id);
 
-  const attemptRuns = await fetchAttemptRunsFromDb(repoId, { startDate: date, endDate: date, includeSteps: true });
+  const attemptRuns = await fetchAttemptRunsFromDb(repoId, { startDate: date, endDate: date, includeSteps: true }, client);
   if (attemptRuns.length > 0) {
     return { date, repo: `${owner}/${repo}`, runs: attemptRuns };
   }
@@ -286,7 +399,7 @@ export async function fetchDay(owner: string, repo: string, fileName: string): P
   const mappedRuns = Array.from(runMap.values());
 
   // fetchDay always loads steps
-  await fetchStepsAndAttach(mappedRuns);
+  await fetchStepsAndAttach(mappedRuns, client);
 
   return { date, repo: `${owner}/${repo}`, runs: mappedRuns };
 }
@@ -296,13 +409,11 @@ async function fetchRunsFromDb(repoId: number, dateFilter: {
   endDate?: string;
   limit?: number;
   includeSteps?: boolean;
-}): Promise<Run[]> {
-  const attemptRuns = await fetchAttemptRunsFromDb(repoId, dateFilter);
+}, client = getTursoClient()): Promise<Run[]> {
+  const attemptRuns = await fetchAttemptRunsFromDb(repoId, dateFilter, client);
   if (attemptRuns.length > 0) {
     return attemptRuns;
   }
-
-  const client = getTursoClient();
 
   // Step 1: Query runs only (avoids LEFT JOIN + LIMIT truncation bug)
   let runsSql = `SELECT id, name, head_branch, head_sha, status, conclusion,
@@ -355,7 +466,7 @@ async function fetchRunsFromDb(repoId: number, dateFilter: {
   });
 
   if (dateFilter.includeSteps) {
-    await fetchStepsAndAttach(mappedRuns);
+    await fetchStepsAndAttach(mappedRuns, client);
   }
 
   return mappedRuns;
@@ -366,8 +477,7 @@ async function fetchAttemptRunsFromDb(repoId: number, dateFilter: {
   endDate?: string;
   limit?: number;
   includeSteps?: boolean;
-}): Promise<Run[]> {
-  const client = getTursoClient();
+}, client = getTursoClient()): Promise<Run[]> {
 
   let attemptsSql = `SELECT r.id, r.name, r.head_branch, r.head_sha, r.event, r.html_url,
                             r.workflow_path, r.workflow_parse_status, r.updated_at,
@@ -451,7 +561,7 @@ async function fetchAttemptRunsFromDb(repoId: number, dateFilter: {
   });
 
   if (dateFilter.includeSteps) {
-    await fetchAttemptStepsAndAttach(runs);
+    await fetchAttemptStepsAndAttach(runs, client);
   }
 
   return runs;
@@ -475,7 +585,7 @@ function selectFiles(files: string[], options: FetchRunsOptions): string[] {
 }
 
 async function fetchRunsFromFiles(owner: string, repo: string, files: string[]): Promise<Run[]> {
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
   const { rows: repoRows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
     args: [owner, repo],
@@ -488,7 +598,7 @@ async function fetchRunsFromFiles(owner: string, repo: string, files: string[]):
   const allRuns: Run[] = [];
   for (const file of files) {
     const date = file.replace('.json', '');
-    const runs = await fetchRunsFromDb(repoId, { startDate: date, endDate: date });
+    const runs = await fetchRunsFromDb(repoId, { startDate: date, endDate: date }, client);
     allRuns.push(...runs);
   }
 
@@ -496,7 +606,7 @@ async function fetchRunsFromFiles(owner: string, repo: string, files: string[]):
 }
 
 export async function fetchRuns(owner: string, repo: string, options: FetchRunsOptions = {}): Promise<Run[]> {
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
   const { rows: repoRows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
     args: [owner, repo],
@@ -507,7 +617,7 @@ export async function fetchRuns(owner: string, repo: string, options: FetchRunsO
   const repoId = Number(repoRows[0].id);
 
   if (options.startDate && options.endDate) {
-    return fetchRunsFromDb(repoId, { startDate: options.startDate, endDate: options.endDate, includeSteps: options.includeSteps });
+    return fetchRunsFromDb(repoId, { startDate: options.startDate, endDate: options.endDate, includeSteps: options.includeSteps }, client);
   }
 
   const { days = 7, now = new Date() } = options;
@@ -515,7 +625,7 @@ export async function fetchRuns(owner: string, repo: string, options: FetchRunsO
   cutoff.setUTCDate(cutoff.getUTCDate() - days);
   const cutoffDate = cutoff.toISOString().slice(0, 10);
 
-  return fetchRunsFromDb(repoId, { startDate: cutoffDate, endDate: undefined, includeSteps: options.includeSteps });
+  return fetchRunsFromDb(repoId, { startDate: cutoffDate, endDate: undefined, includeSteps: options.includeSteps }, client);
 }
 
 export async function fetchRunsFromIndex(
@@ -524,7 +634,7 @@ export async function fetchRunsFromIndex(
   repoIndex: Index,
   options: FetchRunsOptions = {}
 ): Promise<Run[]> {
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
   const { rows: repoRows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
     args: [owner, repo],
@@ -535,7 +645,7 @@ export async function fetchRunsFromIndex(
   const repoId = Number(repoRows[0].id);
 
   if (options.startDate && options.endDate) {
-    return fetchRunsFromDb(repoId, { startDate: options.startDate, endDate: options.endDate, includeSteps: options.includeSteps });
+    return fetchRunsFromDb(repoId, { startDate: options.startDate, endDate: options.endDate, includeSteps: options.includeSteps }, client);
   }
 
   const dates = selectFiles(repoIndex.files, options);
@@ -544,11 +654,11 @@ export async function fetchRunsFromIndex(
   const firstDate = dates[dates.length - 1].replace('.json', '');
   const lastDate = dates[0].replace('.json', '');
 
-  return fetchRunsFromDb(repoId, { startDate: firstDate, endDate: lastDate, includeSteps: options.includeSteps });
+  return fetchRunsFromDb(repoId, { startDate: firstDate, endDate: lastDate, includeSteps: options.includeSteps }, client);
 }
 
 export async function fetchLatestRuns(owner: string, repo: string, maxFiles = 7): Promise<Run[]> {
-  const client = getTursoClient();
+  const client = getDashboardClient(owner, repo);
   const { rows: repoRows } = await client.execute({
     sql: `SELECT id FROM repos WHERE owner = ? AND repo = ?`,
     args: [owner, repo],
@@ -558,7 +668,7 @@ export async function fetchLatestRuns(owner: string, repo: string, maxFiles = 7)
   }
   const repoId = Number(repoRows[0].id);
 
-  return fetchRunsFromDb(repoId, { limit: maxFiles * 20 });
+  return fetchRunsFromDb(repoId, { limit: maxFiles * 20 }, client);
 }
 
 export async function fetchLatestRunsFromIndex(

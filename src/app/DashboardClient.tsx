@@ -30,6 +30,8 @@ import { differenceInCalendarDays, format, parseISO } from 'date-fns';
 import { buildDailyTrend, buildRepoOverviewRows, createDateRange, filterByDateRange } from '@/lib/overview-metrics';
 import { diffSeconds } from '@/lib/time-utils';
 import { callApi } from '@/lib/api-client';
+import RunOverview from '@/app/RunOverview';
+import { getFeedbackUrl } from '@/lib/app-config';
 import type { RepoOption } from '@/lib/server-homepage-data';
 import type {
   DailyTrendPoint,
@@ -1852,7 +1854,7 @@ function DashboardContent({
   }, []);
 
   useEffect(() => {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams(searchParams.toString());
 
     if (useCustomRange) {
       params.set('useCustomRange', 'true');
@@ -1860,10 +1862,16 @@ function DashboardContent({
       if (endDate) params.set('endDate', endDate);
     } else if (days !== 7) {
       params.set('days', String(days));
+      params.delete('useCustomRange');
+      params.delete('startDate');
+      params.delete('endDate');
     }
     if (selectedRepo) params.set('repo', selectedRepo.key);
     if (debouncedFilterName) params.set('filterName', debouncedFilterName);
+    else params.delete('filterName');
     if (selectedJobName) params.set('jobName', selectedJobName);
+    else params.delete('jobName');
+    if (!params.get('workflowFile')) params.delete('workflowRef');
 
     const query = params.toString();
     const nextUrl = query ? `${pathname}?${query}` : pathname;
@@ -2437,22 +2445,13 @@ function DashboardContent({
             <button type="button" onClick={copyShareLink} title="Copy link to current view" className="flex items-center justify-center rounded-lg bg-neutral-100 p-2 text-neutral-600 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700">
               <Share2 className="h-5 w-5" />
             </button>
-            <a href="https://github.com/pkking/action-insight/issues/new/choose" target="_blank" rel="noopener noreferrer" title="Give Feedback / Report Bug" className="flex items-center justify-center rounded-lg bg-neutral-100 p-2 text-neutral-600 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700">
+            <a href={getFeedbackUrl()} target="_blank" rel="noopener noreferrer" title="Give Feedback / Report Bug" className="flex items-center justify-center rounded-lg bg-neutral-100 p-2 text-neutral-600 transition-colors hover:bg-neutral-200 dark:bg-neutral-800 dark:text-neutral-400 dark:hover:bg-neutral-700">
               <MessageSquare className="h-5 w-5" />
             </a>
           </div>
         </header>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-2 rounded-lg border border-neutral-200 bg-white px-3 py-2 dark:border-neutral-700 dark:bg-neutral-900">
-            <label htmlFor="repo-select" className="whitespace-nowrap text-sm text-neutral-500 dark:text-neutral-400">Trend Repo</label>
-            <select id="repo-select" value={selectedRepo.key} onChange={(event) => handleRepoSelection(event.target.value)} className="min-w-56 bg-transparent text-sm text-neutral-700 outline-none dark:text-neutral-300">
-              {repoOptions.map((repo) => (
-                <option key={repo.key} value={repo.key}>{repo.key}</option>
-              ))}
-            </select>
-          </div>
-
           {[7, 14, 30, 90].map((value) => (
             <button
               type="button"
@@ -2492,6 +2491,14 @@ function DashboardContent({
             </div>
           )}
         </div>
+
+        <RunOverview
+          repoOptions={repoOptions}
+          selectedRepo={selectedRepo}
+          startDate={format(workflowDateRange.start, 'yyyy-MM-dd')}
+          endDate={format(workflowDateRange.end, 'yyyy-MM-dd')}
+          onRepoChange={handleRepoSelection}
+        />
 
         {error ? (
           <div className="rounded-lg border border-red-100 bg-red-50 p-4 text-red-600 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">{error}</div>

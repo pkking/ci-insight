@@ -1,12 +1,20 @@
 # ADR-004: SQLite Database Files Stored via Git LFS
 
-**Status**: Accepted, revised 2026-07-03
+**Status**: Accepted, revised 2026-07-12
 **Date**: 2026-06-14  
 **Context**: PR #125 (CI collection failures), CI run #27470767070
 
 ## Decision
 
-Per-repo SQLite database files (`etl/data/*.db`) remain tracked in the repository via **Git LFS** for recovery and manual migration workflows. Runtime reads and scheduled ETL writes use **Turso** as the default source of truth.
+Per-repo SQLite database files (`etl/data/*.db`) remain tracked in the repository via **Git LFS** for recovery, local ETL, local dashboard development, and manual migration workflows. Production runtime reads and scheduled online ETL writes use **Turso** as the source of truth.
+
+The dashboard selects its read backend explicitly by environment:
+
+- Local development reads the matching per-repository SQLite file under `etl/data/`.
+- Production deployment reads Turso.
+- The selected backend must fail clearly when unavailable; runtime reads do not silently fall back from Turso to SQLite or from SQLite to Turso.
+
+This local dashboard read path is separate from ETL fallback/mirroring. `ENABLE_SQLITE_FALLBACK` continues to control ETL recovery behavior and does not choose the frontend read backend.
 
 SQLite fallback/mirroring is disabled by default. It is enabled only when `ENABLE_SQLITE_FALLBACK=1` or `ENABLE_SQLITE_FALLBACK=true` is set for local recovery or an explicit Turso outage procedure.
 
@@ -17,13 +25,14 @@ The ETL pipeline (`etl/scripts/collect.ts`) originally wrote collected CI data t
 | Backend | Role | Storage |
 |---------|------|---------|
 | **Turso** (libSQL) | Primary — shared, queryable, remote | Cloud database |
-| **SQLite** (libSQL local) | Explicit fallback/mirror — recovery only | `etl/data/<owner>-<repo>.db` |
+| **SQLite** (libSQL local) | Local dashboard source; explicit ETL fallback/mirror | `etl/data/<owner>-<repo>.db` |
 
 This fallback was introduced after Turso write blocking in CI run #27448049473. After Turso write limits were lifted, default dual writes became a liability because they can create data drift, grow LFS objects, and make CI behavior depend on repository-tracked database snapshots. The revised behavior is:
 
-1. **Turso is authoritative by default** — collection, rebuild, and runtime reads fail if Turso is unavailable.
-2. **SQLite is opt-in** — recovery runs can explicitly enable `ENABLE_SQLITE_FALLBACK`.
-3. **LFS files remain available** — existing `.db` snapshots can still bootstrap recovery or manual migration without being updated on every ETL run.
+1. **Turso is authoritative online** — production collection, rebuild, and runtime reads fail if Turso is unavailable.
+2. **SQLite is authoritative for local dashboard reads** — local development reads the per-repo databases produced by local ETL, without requiring a Turso round trip.
+3. **SQLite ETL fallback is opt-in** — recovery runs can explicitly enable `ENABLE_SQLITE_FALLBACK`.
+4. **LFS files remain available** — existing `.db` snapshots can still bootstrap local development, recovery, or manual migration without being updated on every online ETL run.
 
 ### Why Git LFS
 
@@ -93,14 +102,16 @@ When Turso writes are blocked or unavailable, default ETL now fails fast so oper
 ## Consequences
 
 ### Positive
-- Turso remains the single default source of truth.
+- Turso remains the production source of truth.
 - Routine ETL no longer mutates repository-tracked `.db` files.
-- Existing SQLite/LFS snapshots remain useful for manual disaster recovery.
+- Existing SQLite/LFS snapshots remain useful for local development and manual disaster recovery.
+- Local dashboard development can inspect the exact data produced by local ETL without copying it to Turso.
 
 ### Negative
 - Explicit recovery runs require operators to opt in with `ENABLE_SQLITE_FALLBACK`.
 - Existing LFS objects still consume repository storage until intentionally removed.
 - Recovery workflows must account for possible drift between Turso and old SQLite snapshots.
+- Local and production reads use different physical databases, so query/schema parity must be covered by shared contract tests.
 
 ### Alternatives Considered
 1. **Keep default dual writes** — rejected after Turso limits were lifted because it keeps growing LFS artifacts and risks silent divergence.

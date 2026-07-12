@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { cache } from 'react';
 
-import { getTursoClient, getRepoId as _getRepoId } from './turso';
+import { getDashboardClient, getRepoId as _getRepoId } from './database';
 import { parseTrackedReposYaml } from './tracked-repos.js';
 import type { PullRequestIndexFile, PullRequestMetricsSummary, TestCaseStats } from './types';
 
@@ -34,20 +34,19 @@ export const getTrackedRepoOptions = cache(async (): Promise<RepoOption[]> => {
 const getTestCaseStats = cache(async (owner: string, repo: string): Promise<TestCaseStats | null> => {
   let repoId: number;
   try {
-    repoId = await _getRepoId(owner, repo);
+    const client = getDashboardClient(owner, repo);
+    repoId = await _getRepoId(owner, repo, client);
+    const { rows } = await client.execute({
+      sql: `SELECT * FROM test_case_stats WHERE repo_id = ? ORDER BY generated_at DESC LIMIT 1`,
+      args: [repoId],
+    });
+    return rows.length === 0 ? null : mapTestCaseStatsRow(rows[0]);
   } catch {
     return null;
   }
+});
 
-  const client = getTursoClient();
-  const { rows } = await client.execute({
-    sql: `SELECT * FROM test_case_stats WHERE repo_id = ? ORDER BY generated_at DESC LIMIT 1`,
-    args: [repoId],
-  });
-
-  if (rows.length === 0) return null;
-
-  const data = rows[0];
+function mapTestCaseStatsRow(data: Record<string, unknown>) {
   return {
     total_test_cases: data.total_test_cases as number,
     ascend_test_cases: data.ascend_test_cases as number,
@@ -56,7 +55,7 @@ const getTestCaseStats = cache(async (owner: string, repo: string): Promise<Test
     window_end: data.window_end as string,
     generated_at: data.generated_at as string,
   };
-});
+}
 
 function mapPrSummary(row: Record<string, unknown>): PullRequestMetricsSummary {
   return {
@@ -84,7 +83,25 @@ function mapPrSummary(row: Record<string, unknown>): PullRequestMetricsSummary {
 const getPullRequestIndex = cache(async (owner: string, repo: string): Promise<PullRequestIndexFile> => {
   let repoId: number;
   try {
-    repoId = await _getRepoId(owner, repo);
+    const client = getDashboardClient(owner, repo);
+    repoId = await _getRepoId(owner, repo, client);
+    const { rows } = await client.execute({
+      sql: `SELECT * FROM pr_metrics WHERE repo_id = ? ORDER BY created_at DESC`,
+      args: [repoId],
+    });
+    if (rows.length === 0) {
+      return {
+        repo: `${owner}/${repo}`,
+        generated_at: new Date().toISOString(),
+        prs: [],
+        missingPrArtifact: true,
+      };
+    }
+    return {
+      repo: `${owner}/${repo}`,
+      generated_at: new Date().toISOString(),
+      prs: rows.map((r) => mapPrSummary(r as Record<string, unknown>)),
+    };
   } catch {
     return {
       repo: `${owner}/${repo}`,
@@ -94,26 +111,6 @@ const getPullRequestIndex = cache(async (owner: string, repo: string): Promise<P
     };
   }
 
-  const client = getTursoClient();
-  const { rows } = await client.execute({
-    sql: `SELECT * FROM pr_metrics WHERE repo_id = ? ORDER BY created_at DESC`,
-    args: [repoId],
-  });
-
-  if (rows.length === 0) {
-    return {
-      repo: `${owner}/${repo}`,
-      generated_at: new Date().toISOString(),
-      prs: [],
-      missingPrArtifact: true,
-    };
-  }
-
-  return {
-    repo: `${owner}/${repo}`,
-    generated_at: new Date().toISOString(),
-    prs: rows.map((r) => mapPrSummary(r as Record<string, unknown>)),
-  };
 });
 
 export async function getHomepageData() {

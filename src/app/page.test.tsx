@@ -240,7 +240,7 @@ describe('Dashboard PR view', () => {
   it('shows the repo selector even when rendering the default repo', async () => {
     renderDashboard();
 
-    expect(await screen.findByLabelText('Trend Repo')).toBeInTheDocument();
+    expect(await screen.findByLabelText('Project')).toBeInTheDocument();
     expect(screen.getByDisplayValue('vllm-project/vllm-ascend')).toBeInTheDocument();
   });
 
