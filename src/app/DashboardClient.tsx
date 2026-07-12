@@ -1860,11 +1860,13 @@ function DashboardContent({
       params.set('useCustomRange', 'true');
       if (startDate) params.set('startDate', startDate);
       if (endDate) params.set('endDate', endDate);
-    } else if (days !== 7) {
-      params.set('days', String(days));
+      params.delete('days');
+    } else {
       params.delete('useCustomRange');
       params.delete('startDate');
       params.delete('endDate');
+      if (days !== 7) params.set('days', String(days));
+      else params.delete('days');
     }
     if (selectedRepo) params.set('repo', selectedRepo.key);
     if (debouncedFilterName) params.set('filterName', debouncedFilterName);

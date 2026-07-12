@@ -26,6 +26,8 @@ type WorkflowOption = {
 const PAGE_SIZES = [20, 50, 100] as const;
 const QUEUE_COLOR = '#f59e0b';
 const EXECUTION_COLOR = '#2563eb';
+const UTC_DATE_FORMATTER = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', dateStyle: 'medium' });
+const UTC_DATETIME_FORMATTER = new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', dateStyle: 'medium', timeStyle: 'short' });
 
 function formatDuration(seconds: number | null): string {
   if (seconds == null || !Number.isFinite(seconds)) return '-';
@@ -45,6 +47,14 @@ function workflowLabel(point: Pick<RunOverviewPoint, 'workflowFile' | 'workflowR
 
 function statusLabel(point: RunOverviewPoint): string {
   return point.conclusion || point.status || 'unknown';
+}
+
+function formatUtcDate(value: string | undefined): string {
+  return value ? UTC_DATE_FORMATTER.format(new Date(value)) : '-';
+}
+
+function formatUtcDateTime(value: string): string {
+  return UTC_DATETIME_FORMATTER.format(new Date(value));
 }
 
 function updateSearchParams(
@@ -135,8 +145,8 @@ function RunChart({ runs }: { runs: RunOverviewPoint[] }) {
         ) : null}
       </div>
       <div className="mt-2 flex justify-between text-[10px] text-neutral-400">
-        <span>{runs[0] ? new Date(runs[0].createdAt).toLocaleDateString() : '-'}</span>
-        <span>{runs.at(-1) ? new Date(runs.at(-1)!.createdAt).toLocaleDateString() : '-'}</span>
+        <span>{formatUtcDate(runs[0]?.createdAt)}</span>
+        <span>{formatUtcDate(runs.at(-1)?.createdAt)}</span>
       </div>
     </div>
   );
@@ -151,11 +161,14 @@ export default function RunOverview({ repoOptions, selectedRepo, startDate, endD
   const [workflowLoading, setWorkflowLoading] = useState(true);
   const [tableLoading, setTableLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [page, setPage] = useState(() => Math.max(1, Number(searchParams.get('page') || 1)));
-  const [pageSize, setPageSize] = useState<20 | 50 | 100>(() => {
+  const page = useMemo(() => {
+    const value = Number(searchParams.get('page'));
+    return Number.isInteger(value) && value > 0 ? value : 1;
+  }, [searchParams]);
+  const pageSize = useMemo<20 | 50 | 100>(() => {
     const value = Number(searchParams.get('pageSize'));
     return PAGE_SIZES.includes(value as 20 | 50 | 100) ? value as 20 | 50 | 100 : 20;
-  });
+  }, [searchParams]);
 
   useEffect(() => {
     const stored = localStorage.getItem(APP_CONFIG.themeStorageKey);
@@ -214,7 +227,6 @@ export default function RunOverview({ repoOptions, selectedRepo, startDate, endD
   }, [overviewRuns]);
 
   const updateFilters = (workflow: WorkflowOption | null) => {
-    setPage(1);
     updateSearchParams(pathname, searchParams, router, {
       workflowFile: workflow?.file || null,
       workflowRef: workflow?.ref || null,
@@ -223,14 +235,11 @@ export default function RunOverview({ repoOptions, selectedRepo, startDate, endD
   };
 
   const changePageSize = (value: 20 | 50 | 100) => {
-    setPageSize(value);
-    setPage(1);
     updateSearchParams(pathname, searchParams, router, { pageSize: String(value), page: '1' });
   };
 
   const changePage = (nextPage: number) => {
     const next = Math.max(1, Math.min(nextPage, pageResult?.totalPages || 1));
-    setPage(next);
     updateSearchParams(pathname, searchParams, router, { page: String(next) });
   };
 
@@ -297,7 +306,7 @@ export default function RunOverview({ repoOptions, selectedRepo, startDate, endD
                 <td className="whitespace-nowrap px-4 py-3 text-neutral-600 dark:text-neutral-300">{formatDuration(run.queueSeconds)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-neutral-600 dark:text-neutral-300">{formatDuration(run.executionSeconds)}</td>
                 <td className="whitespace-nowrap px-4 py-3 font-medium">{formatDuration(run.totalSeconds)}</td>
-                <td className="whitespace-nowrap px-4 py-3 text-neutral-500 dark:text-neutral-400">{new Date(run.createdAt).toLocaleString()}</td>
+                <td className="whitespace-nowrap px-4 py-3 text-neutral-500 dark:text-neutral-400">{formatUtcDateTime(run.createdAt)}</td>
               </tr>
             ))}
           </tbody>

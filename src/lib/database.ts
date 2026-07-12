@@ -1,13 +1,12 @@
 import 'server-only';
 
 import { createClient, type Client } from '@libsql/client';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 
 import { resolveDashboardDataSource } from './database-config';
 export { type DashboardDataSource, resolveDashboardDataSource } from './database-config';
 
-const SQLITE_HEADER = Buffer.from('SQLite format 3\0', 'ascii');
 const clientCache = new Map<string, Client>();
 
 function validateRepoSegment(value: string, field: string): void {
@@ -23,13 +22,9 @@ function getSqlitePath(owner: string, repo: string): string {
   return path.join(dataDir, `${owner}-${repo}.db`);
 }
 
-function validateSqliteFile(dbPath: string): void {
+function assertSqliteFileExists(dbPath: string): void {
   if (!existsSync(dbPath)) {
     throw new Error(`Local SQLite database not found: ${dbPath}`);
-  }
-  const header = readFileSync(dbPath).subarray(0, SQLITE_HEADER.length);
-  if (!header.equals(SQLITE_HEADER)) {
-    throw new Error(`Local SQLite database is invalid or still a Git LFS pointer: ${dbPath}`);
   }
 }
 
@@ -55,7 +50,7 @@ export function getDashboardClient(owner: string, repo: string): Client {
   if (source === 'turso') return getConfiguredTursoClient();
 
   const dbPath = getSqlitePath(owner, repo);
-  validateSqliteFile(dbPath);
+  assertSqliteFileExists(dbPath);
   const key = `sqlite:${dbPath}`;
   const cached = clientCache.get(key);
   if (cached) return cached;
@@ -69,10 +64,18 @@ export function getTursoClient(): Client {
 }
 
 export async function getRepoId(owner: string, repo: string, client = getDashboardClient(owner, repo)): Promise<number> {
-  const { rows } = await client.execute({
-    sql: 'SELECT id FROM repos WHERE owner = ? AND repo = ?',
-    args: [owner, repo],
-  });
+  let rows;
+  try {
+    ({ rows } = await client.execute({
+      sql: 'SELECT id FROM repos WHERE owner = ? AND repo = ?',
+      args: [owner, repo],
+    }));
+  } catch (error) {
+    if (resolveDashboardDataSource() === 'sqlite') {
+      throw new Error(`Local SQLite database cannot be opened for ${owner}/${repo}`, { cause: error });
+    }
+    throw error;
+  }
   if (rows.length === 0) {
     throw new Error(`Repository ${owner}/${repo} not found in database`);
   }
