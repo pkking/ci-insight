@@ -64,6 +64,8 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The Vercel project name and deployment domain are not coupled to the GitHub repository name. Browser share links use the current deployment origin, while GitHub links use `NEXT_PUBLIC_GITHUB_REPOSITORY`; set that variable only when deploying this code to a different repository.
 
+The Dependency Review workflow is enabled when the repository variable `DEPENDENCY_GRAPH_ENABLED` is set to `true` after GitHub Dependency graph is enabled. It remains skipped otherwise because GitHub does not support `dependency-review-action` without that repository security capability.
+
 ### ETL Pipeline
 
 Each repository has its own scheduled workflow that runs hourly. Workflows are named `collect-<owner>-<repo>.yml`.

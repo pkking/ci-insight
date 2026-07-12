@@ -11,6 +11,9 @@ permissions:
 jobs:
   dependency-review:
     name: Review Dependencies
+    # GitHub's dependency-review-action requires the repository Dependency graph.
+    # Opt in per repository once that security setting is enabled.
+    if: vars.DEPENDENCY_GRAPH_ENABLED == 'true'
     runs-on: ubuntu-latest
 
     steps:
